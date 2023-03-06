@@ -1,9 +1,10 @@
 package natsjobs
 
 import (
+	"fmt"
 	"github.com/goccy/go-json"
 	"github.com/google/uuid"
-	"github.com/roadrunner-server/sdk/v4/utils"
+	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
 )
 
@@ -12,43 +13,25 @@ const (
 	auto string = "deduced_by_rr"
 )
 
-func (c *Driver) unpack(data []byte, item *Item) error {
-	err := json.Unmarshal(data, item)
-	if err != nil {
-		if c.consumeAll {
-			c.log.Debug("unmarshal error", zap.Error(err))
+func (c *Driver) unpack(m *nats.Msg, meta *nats.MsgMetadata) (*Item, error) {
+	item := &Item{}
 
-			uid := uuid.NewString()
-			c.log.Debug("get raw payload", zap.String("assigned ID", uid))
+	if c.consumeAll {
+		uid := uuid.NewString()
+		c.log.Debug("get raw payload", zap.String("assigned ID", uid))
+		item.Job = auto
+		item.Ident = fmt.Sprintf("%d:%d", meta.Sequence.Consumer, meta.Sequence.Stream)
+		item.Payload = string(m.Data)
+		item.Headers = m.Header
+		item.Options = &Options{Priority: 10, Pipeline: auto}
 
-			if isJSONEncoded(data) != nil {
-				data, err = json.Marshal(data)
-				if err != nil {
-					return err
-				}
-			}
-
-			*item = Item{
-				Job:     auto,
-				Ident:   uid,
-				Payload: utils.AsString(data),
-				Headers: nil,
-				Options: &Options{
-					Priority: 10,
-					Pipeline: auto,
-				},
-			}
-
-			return nil
-		}
-
-		return err
+		return item, nil
 	}
 
-	return nil
-}
+	err := json.Unmarshal(m.Data, item)
+	if err != nil {
+		return nil, err
+	}
 
-func isJSONEncoded(data []byte) error {
-	var a any
-	return json.Unmarshal(data, &a)
+	return item, nil
 }

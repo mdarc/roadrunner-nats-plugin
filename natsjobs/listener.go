@@ -13,6 +13,12 @@ func (c *Driver) listenerInit() error {
 	if c.deliverNew {
 		opts = append(opts, nats.DeliverNew())
 	}
+	if c.deliverLast {
+		opts = append(opts, nats.DeliverLast())
+	}
+	if c.durable != "" {
+		opts = append(opts, nats.Durable(c.durable))
+	}
 
 	opts = append(opts, nats.RateLimit(c.rateLimit))
 	opts = append(opts, nats.AckExplicit())
@@ -42,8 +48,7 @@ func (c *Driver) listenerStart() { //nolint:gocognit
 					continue
 				}
 
-				item := &Item{}
-				err = c.unpack(m.Data, item)
+				item, err := c.unpack(m, meta)
 				if err != nil {
 					c.log.Error("unmarshal nats payload", zap.Error(err))
 					continue

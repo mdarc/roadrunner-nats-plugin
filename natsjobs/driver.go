@@ -53,12 +53,15 @@ type Driver struct {
 	rateLimit          uint64
 	deleteAfterAck     bool
 	deliverNew         bool
+	deliverLast        bool
 	deleteStreamOnStop bool
+	durable            string
 }
 
 func FromConfig(configKey string, log *zap.Logger, cfg Configurer, pipe jobs.Pipeline, pq pq.Queue, _ chan<- jobs.Commander) (*Driver, error) {
 	const op = errors.Op("new_nats_consumer")
 
+	log.Info("NATS fromConfig...")
 	if !cfg.Has(configKey) {
 		return nil, errors.E(op, errors.Errorf("no configuration by provided key: %s", configKey))
 	}
@@ -81,16 +84,7 @@ func FromConfig(configKey string, log *zap.Logger, cfg Configurer, pipe jobs.Pip
 
 	conf.InitDefaults()
 
-	conn, err := nats.Connect(conf.Addr,
-		nats.NoEcho(),
-		nats.Timeout(time.Minute),
-		nats.MaxReconnects(-1),
-		nats.PingInterval(time.Second*10),
-		nats.ReconnectWait(time.Second),
-		nats.ReconnectBufSize(reconnectBuffer),
-		nats.ReconnectHandler(reconnectHandler(log)),
-		nats.DisconnectErrHandler(disconnectHandler(log)),
-	)
+	conn, err := nats.Connect(conf.Addr, buildNatsOptions(conf, log)...)
 	if err != nil {
 		return nil, errors.E(op, err)
 	}
@@ -135,7 +129,9 @@ func FromConfig(configKey string, log *zap.Logger, cfg Configurer, pipe jobs.Pip
 		deleteStreamOnStop: conf.DeleteStreamOnStop,
 		prefetch:           conf.Prefetch,
 		deliverNew:         conf.DeliverNew,
+		deliverLast:        conf.DeliverLast,
 		rateLimit:          conf.RateLimit,
+		durable:            conf.Durable,
 		msgCh:              make(chan *nats.Msg, conf.Prefetch),
 	}
 
@@ -145,6 +141,7 @@ func FromConfig(configKey string, log *zap.Logger, cfg Configurer, pipe jobs.Pip
 }
 
 func FromPipeline(pipe jobs.Pipeline, log *zap.Logger, cfg Configurer, pq pq.Queue, _ chan<- jobs.Commander) (*Driver, error) {
+	log.Info("NATS from Pipeline...")
 	const op = errors.Op("new_nats_pipeline_consumer")
 
 	// if no global section -- error
@@ -160,16 +157,7 @@ func FromPipeline(pipe jobs.Pipeline, log *zap.Logger, cfg Configurer, pq pq.Que
 
 	conf.InitDefaults()
 
-	conn, err := nats.Connect(conf.Addr,
-		nats.NoEcho(),
-		nats.Timeout(time.Minute),
-		nats.MaxReconnects(-1),
-		nats.PingInterval(time.Second*10),
-		nats.ReconnectWait(time.Second),
-		nats.ReconnectBufSize(reconnectBuffer),
-		nats.ReconnectHandler(reconnectHandler(log)),
-		nats.DisconnectErrHandler(disconnectHandler(log)),
-	)
+	conn, err := nats.Connect(conf.Addr, buildNatsOptions(conf, log)...)
 	if err != nil {
 		return nil, errors.E(op, err)
 	}
@@ -213,8 +201,10 @@ func FromPipeline(pipe jobs.Pipeline, log *zap.Logger, cfg Configurer, pq pq.Que
 		prefetch:           pipe.Int(pipePrefetch, 100),
 		deleteAfterAck:     pipe.Bool(pipeDeleteAfterAck, false),
 		deliverNew:         pipe.Bool(pipeDeliverNew, false),
+		deliverLast:        pipe.Bool(pipeDeliverLast, false),
 		deleteStreamOnStop: pipe.Bool(pipeDeleteStreamOnStop, false),
 		rateLimit:          uint64(pipe.Int(pipeRateLimit, 1000)),
+		durable:            pipe.String(pipeDurable, ""),
 		msgCh:              make(chan *nats.Msg, pipe.Int(pipePrefetch, 100)),
 	}
 
@@ -430,14 +420,32 @@ func reconnectHandler(log *zap.Logger) func(*nats.Conn) {
 func disconnectHandler(log *zap.Logger) func(*nats.Conn, error) {
 	return func(_ *nats.Conn, err error) {
 		if err != nil {
-			log.Error("nast disconnected", zap.Error(err))
+			log.Error("nats disconnected", zap.Error(err))
 			return
 		}
 
-		log.Warn("nast disconnected")
+		log.Warn("nats disconnected")
 	}
 }
 
 func ready(r uint32) bool {
 	return r > 0
+}
+
+func buildNatsOptions(conf *config, log *zap.Logger) []nats.Option {
+	natsOptions := []nats.Option{
+		nats.Name(conf.Name),
+		nats.Token(conf.Token),
+		nats.UserInfo(conf.User, conf.Password),
+		nats.NoEcho(),
+		nats.Timeout(time.Minute),
+		nats.MaxReconnects(-1),
+		nats.PingInterval(time.Second * 10),
+		nats.ReconnectWait(time.Second),
+		nats.ReconnectBufSize(reconnectBuffer),
+		nats.ReconnectHandler(reconnectHandler(log)),
+		nats.DisconnectErrHandler(disconnectHandler(log)),
+	}
+
+	return natsOptions
 }
